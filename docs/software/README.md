@@ -350,3 +350,308 @@ COMMIT;
 ```
 
 ## RESTfull сервіс для управління даними
+
+### Точка входу
+```ts
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './modules/app.module';
+import { ValidationPipe } from '@nestjs/common';
+import * as process from 'process';
+
+const port = process.env.PORT ?? 3000;
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  app.useGlobalPipes(new ValidationPipe());
+  await app.listen(port, () => console.info(`Server started on 127.0.0.1:${port}`));
+}
+bootstrap();
+```
+
+### Головний модуль
+```ts
+import { Module } from '@nestjs/common';
+import { RoleModule } from './role.module';
+import { DatabaseModule } from '../database/database.module';
+
+@Module({
+  imports: [
+    RoleModule,
+    DatabaseModule,
+  ],
+})
+export class AppModule {}
+```
+
+### Модуль бази диних
+```ts
+import { Module } from '@nestjs/common';
+import { databaseProvider } from './database.provider';
+
+@Module({
+  providers: [databaseProvider],
+  exports: [databaseProvider],
+})
+export class DatabaseModule {}
+```
+
+### Провайдер бази даних
+```ts
+import { Sequelize } from 'sequelize-typescript';
+import * as process from 'process';
+import { Role } from './entities/role.entity';
+import { Permission } from './entities/permission.entity';
+import { RoleHasPermission } from './entities/role-has-permission.entity';
+
+export const databaseProvider = {
+  provide: 'SEQUELIZE',
+  useFactory: async () => {
+    const sequelize = new Sequelize(process.env.DATABASE_URL);
+    sequelize.addModels([Role, Permission, RoleHasPermission]);
+    await sequelize.sync();
+    return sequelize;
+  },
+};
+```
+
+### Модель Role
+```ts
+import { AllowNull, AutoIncrement, Column, HasMany, Model, PrimaryKey, Table } from 'sequelize-typescript';
+import { RoleHasPermission } from './role-has-permission.entity';
+
+@Table({
+  tableName: 'roles',
+  timestamps: false,
+})
+export class Role extends Model {
+  @AutoIncrement
+  @PrimaryKey
+  @Column
+  id: number;
+
+  @AllowNull(false)
+  @Column
+  name: string;
+
+  @Column
+  description: string;
+
+  @HasMany(() => RoleHasPermission)
+  permissions: RoleHasPermission[];
+}
+```
+
+### Провайдер Role
+```ts
+import { Role } from '../entities/role.entity';
+
+export const roleProvider = {
+  provide: 'ROLE_REPOSITORY',
+  useValue: Role,
+}
+```
+
+### Модель Permission
+```ts
+import {AllowNull, AutoIncrement, Column, HasMany, Model, PrimaryKey, Table} from 'sequelize-typescript';
+import {RoleHasPermission} from "./role-has-permission.entity";
+
+@Table({
+  tableName: 'permissions',
+  timestamps: false,
+})
+export class Permission extends Model {
+  @PrimaryKey
+  @AutoIncrement
+  @Column
+  id: number;
+
+  @AllowNull(false)
+  @Column
+  name: string;
+
+  @HasMany(() => RoleHasPermission)
+  roles: RoleHasPermission[];
+}
+```
+
+### Модель RoleHasPermission
+```ts
+import { BelongsTo, Column, ForeignKey, Model, Table } from 'sequelize-typescript';
+import { Role } from './role.entity';
+import { Permission } from './permission.entity';
+
+@Table({
+  tableName: 'role_has_permission',
+  timestamps: false,
+})
+export class RoleHasPermission extends Model {
+  @ForeignKey(() => Role)
+  @Column({ field: 'role_id'})
+  roleId: number;
+
+  @ForeignKey(() => Permission)
+  @Column({ field: 'permission_id'})
+  permissionId: number;
+
+  @BelongsTo(() => Role, 'roleId')
+  role: Role;
+
+  @BelongsTo(() => Permission, 'permissionId')
+  permission: Permission;
+}
+```
+
+### Модуль Role
+```ts
+import { Module } from '@nestjs/common';
+import { RoleService } from '../services/role.service';
+import { RoleController } from '../controllers/role.controller';
+import { roleProvider } from '../database/providers/role.provider';
+
+@Module({
+  providers: [RoleService, roleProvider],
+  controllers: [RoleController],
+})
+export class RoleModule {}
+```
+
+### Контролер Role
+```ts
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post } from '@nestjs/common';
+import { RoleService } from '../services/role.service';
+import { RoleByIdPipe } from '../pipes/role-by-id.pipe';
+import { CreateRoleDto } from '../dtos/create-role.dto';
+import { UpdateRoleDto } from '../dtos/update-role.dto';
+import { Role } from '../database/entities/role.entity';
+
+@Controller('roles')
+export class RoleController {
+  constructor(
+    private roleService: RoleService,
+  ) {}
+
+  @Get()
+  async getAll() {
+    return this.roleService.getAll();
+  }
+
+  @Get('/:roleId')
+  async get(
+    @Param('roleId', ParseIntPipe, RoleByIdPipe) role: Role,
+  ) {
+    return role;
+  }
+
+  @Post()
+  async create(
+    @Body() body: CreateRoleDto,
+  ) {
+    return this.roleService.create(body);
+  }
+
+  @Patch('/:roleId')
+  async update(
+    @Body() body: UpdateRoleDto,
+    @Param('roleId', ParseIntPipe, RoleByIdPipe) role: Role,
+  ) {
+    return this.roleService.update(role, body);
+  }
+
+  @Delete('/:roleId')
+  async delete(
+    @Param('roleId', ParseIntPipe, RoleByIdPipe) role: Role,
+  ) {
+    return this.roleService.delete(role);
+  }
+}
+```
+
+### Сервіс Role
+```ts
+import { Inject, Injectable } from '@nestjs/common';
+import { Role } from '../database/entities/role.entity';
+import { CreateRoleDto } from '../dtos/create-role.dto';
+import { UpdateRoleDto } from '../dtos/update-role.dto';
+
+@Injectable()
+export class RoleService {
+  constructor(
+    @Inject('ROLE_REPOSITORY')
+    private roleRepository: typeof Role
+  ) {}
+
+  async getAll(): Promise<Role[]> {
+    return this.roleRepository.findAll()
+  }
+
+  async create(data: CreateRoleDto) {
+    return this.roleRepository.create({ ...data });
+  }
+
+  async update(role: Role, data: UpdateRoleDto) {
+    await role.update(data);
+    return role;
+  }
+
+  async delete(role: Role) {
+    await role.destroy()
+    return role;
+  }
+}
+```
+
+### DTO для створення ролі
+```ts
+import { IsEnum, IsNotEmpty, IsOptional } from 'class-validator';
+
+export enum RoleName {
+  USER = 'USER',
+  TECHNICAL_EXPERT = 'TECHNICAL_EXPERT',
+}
+
+export class CreateRoleDto {
+  @IsEnum(RoleName, { message: 'Name must be USER or TECHNICAL_EXPERT' })
+  @IsNotEmpty({ message: 'Name is required' })
+  name: string
+
+  @IsOptional()
+  description?: string;
+}
+```
+
+### DTO для оновлення ролі
+```ts
+import { IsEnum, IsOptional } from 'class-validator';
+import { RoleName } from './create-role.dto';
+
+export class UpdateRoleDto {
+  @IsEnum(RoleName, { message: 'Name must be USER or TECHNICAL_EXPERT' })
+  @IsOptional()
+  name?: string
+
+  @IsOptional()
+  description?: string;
+}
+```
+
+### Pipe для отримання ролі
+```ts
+import { Inject, Injectable, NotFoundException, PipeTransform } from '@nestjs/common';
+import { Role } from '../database/entities/role.entity';
+
+@Injectable()
+export class RoleByIdPipe implements PipeTransform {
+  constructor(
+    @Inject('ROLE_REPOSITORY')
+    private roleRepository: typeof Role
+  ) {}
+  async transform(id: number): Promise<Role> {
+    const role = await this.roleRepository.findByPk(id);
+
+    if (!role) throw new NotFoundException();
+
+    return role;
+  }
+}
+```
